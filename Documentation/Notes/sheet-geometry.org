@@ -1,0 +1,110 @@
+#+title: Sheet Geometry
+#+author: Daniel 'jackdaniel' Kochmański
+#+date: [2021-02-09 wto]
+
+* Coordinate systems
+
+  We distinguish five types of coordinate systems in relation to a sheet:
+
+  - local  :: coordinates as passed to drawing functions
+  - sheet  :: coordinates are relative to the sheet's region[fn:3]
+  - parent :: coordinates are relative to the parent's region
+  - native :: coordinates are relative to the mirror's region
+  - screen :: coordinates are relative to the graft's region
+
+* Transformations
+
+  #+BEGIN_SRC lisp
+  (medium-transformation       sheet) ; (local -> sheet)
+  (sheet-transformation        sheet) ; (sheet -> parent)
+  (sheet-native-transformation sheet) ; (sheet -> mirror)
+  (sheet-device-transformation sheet) ; (local -> mirror)
+  #+END_SRC
+
+  Sheets are arranged in a tree hierarchy. To acquire a transformation between
+  two sheets coordinate systems we use a function ~sheet-delta-transformation~,
+  where the second argument must be an ancestor (or nil) of the first sheet.
+
+  #+BEGIN_SRC lisp
+  ;; Parent transformation (sheet -> parent)
+  (sheet-delta-transformation sheet (sheet-parent sheet))
+  ;; Native transformation (sheet -> mirrored-ancestor -> mirror)
+  (let ((mirrored-ancestor (sheet-mirrored-ancestor sheet)))
+    (compose-transformations
+     (sheet-native-transformation mirrored-ancestor)
+     (sheet-delta-transformation sheet mirrored-ancestor)))
+  ;; Screen transformation (sheet -> graft)
+  (sheet-delta-transformation sheet nil)
+  #+END_SRC
+
+  Given the above, the following relation is always true:
+
+  #+BEGIN_SRC lisp
+  (transformation-equal (sheet-device-transformation sheet)
+                        (compose-transformations
+                         (sheet-native-transformation sheet)
+                         (medium-transformation sheet)))
+  #+END_SRC
+
+  Both ~sheet-transformation~ and ~medium-transformation~ are setf-able.
+  Changing the former invalidates the cached ~sheet-native-transformation~.
+  Moreover ~move-sheet~ may change the ~sheet-transformation~.
+
+* Regions
+
+  Every sheet has a region which is an area (for example an intersection between
+  two ellipses[fn:1]). It is accessed with a function ~sheet-region~.
+
+  The operators ~sheet-native-region~ and ~sheet-device-region~[fn:4] work in a
+  similar way to the transformation operators with one important difference: the
+  region of the parent clips the region of the child. Each region is expressed
+  in its coordinate system (i.e sheet-native-region is expressed in the native
+  coordinate system).
+
+  #+BEGIN_SRC lisp
+  (medium-clipping-region sheet) ; local clip
+  (sheet-region sheet)           ; sheet clip
+  (sheet-native-region sheet)    ; intersection of all sheet regions between the sheet and its mirrored ancestor
+  (sheet-device-region sheet)    ; intersection of the native region and a local clip
+  #+END_SRC
+
+  ~sheet-region~ is setf-able. Moreover ~resize-sheet~ may be called on the
+  sheet to change the sheet's region[fn:2]. The function ~move-and-resize-sheet~
+  modifies both the transformation and the region.
+
+* Sheets and mirrors
+
+  Each mirror also has a transformation and a region, however they are a subject
+  to certain restrictions:
+
+  - a mirror transformation must always be a translation (or an identity)
+  - a mirror region must always be a rectangle starting at the point [0, 0]
+
+  Some backends may impose additional restrictions. For example the X11 protocol
+  specifies that the window position is specified as two int16 coordinates and
+  its size as two uint16 values.
+
+  When a mirrored sheet has a region that is not a rectangle, then the mirror
+  region is a bounding-rectangle of that sheet.
+
+* Footnotes
+
+[fn:4] Technically speaking the mirrored ancestor sheet region should be
+clipped by the mirror region, however we stipulate that the mirror is big
+enough to contain whole mirrored sheet region, thus the following is true:
+
+#+BEGIN_SRC lisp
+  (let ((mirror (sheet-direct-mirror msheet))
+        (region (transform-region (sheet-native-transformation msheet)
+                                  (sheet-region msheet))))
+    (region-equal region
+                  (region-intersection region (mirror-region mirror))))
+#+END_SRC
+
+[fn:3] The sheet region is also known as a "drawing plane"
+
+[fn:1] Don't do that though.
+
+[fn:2] It is not clear what shoudl happen when the current region is not a
+rectangle - replace it with a rectangle or maybe rather scale it so the
+bounding rectangle has a matching width and height?
